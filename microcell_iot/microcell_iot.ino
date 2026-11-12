@@ -651,68 +651,19 @@ void uploadSensor()
     if (!Firebase.ready())
         return;
 
-    // ==================================================
-    // WAKTU SIMULASI
-    // ==================================================
-
-    float t = millis() / 1000.0;
+    // Baca sensor asli terlebih dahulu
+    readSensor();
+    readACS();
 
     // ==================================================
-    // TEGANGAN
-    // 8.50 - 9.00 V
-    // ==================================================
-
-    float dummyVoltage =
-        8.75 +
-        (0.25 * sin(t * 0.15));
-
-    // ==================================================
-    // ARUS
-    // 20 - 40 mA
-    // ==================================================
-
-    float dummyCurrent =
-        30.0 +
-        (10.0 * sin(t * 0.25));
-
-    // ==================================================
-    // DAYA
-    // P = V x I
-    // ==================================================
-
-    float dummyPower =
-        dummyVoltage *
-        (dummyCurrent / 1000.0);
-
-    // ==================================================
-    // ACS CURRENT
-    // 0.02 - 0.05 A
-    // ==================================================
-
-    float dummyAcsCurrent =
-        0.035 +
-        (0.015 * sin(t * 0.20));
-
-    // ==================================================
-    // ACS VOLTAGE
-    // ==================================================
-
-    float dummyAcsVoltage =
-        1.65 +
-        (
-            dummyAcsCurrent *
-            ACS_SENSITIVITY
-        );
-
-    // ==================================================
-    // UPLOAD VOLTAGE
+    // UPLOAD VOLTAGE (INA219)
     // ==================================================
 
     if (
         !Firebase.RTDB.setFloat(
             &fbdo,
             "/devices/main/sensors/ina1/voltage",
-            dummyVoltage
+            voltage
         )
     )
     {
@@ -721,14 +672,14 @@ void uploadSensor()
     }
 
     // ==================================================
-    // UPLOAD CURRENT
+    // UPLOAD CURRENT (INA219 - mA)
     // ==================================================
 
     if (
         !Firebase.RTDB.setFloat(
             &fbdo,
             "/devices/main/sensors/ina1/current",
-            dummyCurrent
+            current * 1000.0
         )
     )
     {
@@ -745,7 +696,7 @@ void uploadSensor()
         !Firebase.RTDB.setFloat(
             &fbdo,
             "/devices/main/sensors/ina1/power",
-            dummyPower * 1000.0
+            power * 1000.0
         )
     )
     {
@@ -761,7 +712,7 @@ void uploadSensor()
         !Firebase.RTDB.setFloat(
             &fbdo,
             "/devices/main/sensors/acs1/current",
-            dummyAcsCurrent
+            acsCurrent
         )
     )
     {
@@ -777,7 +728,7 @@ void uploadSensor()
         !Firebase.RTDB.setFloat(
             &fbdo,
             "/devices/main/sensors/acs1/voltage",
-            dummyAcsVoltage
+            acsVoltage
         )
     )
     {
