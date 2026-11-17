@@ -28,7 +28,14 @@
 // PIN ACS
 // ======================================================
 
-#define ACS_PIN 15
+#define ACS_PIN 34
+const float ACS_SENSITIVITY = 0.185;  // 185 mV/A untuk varian 5A
+const float ACS_DIVIDER_GAIN = 1.5;   // Pembagi tegangan 10k dan 20k
+
+float acsZeroVoltage = 2.5;
+float acsVoltage = 0;
+float acsCurrent = 0;
+int acsRaw = 0;
 
 // ======================================================
 // LCD
@@ -64,26 +71,19 @@ float voltage = 0;
 float current = 0;
 float power = 0;
 
-float acsVoltage = 0;
-float acsCurrent = 0;
-int acsRaw = 0;
-
 // ======================================================
 // ACS CONFIG
 // ======================================================
 
 const float ACS_VCC = 3.3;
-const float ACS_SENSITIVITY = 0.185;
-
-float acsZeroVoltage = 1.65;
 
 // ======================================================
 // INTERVAL
 // ======================================================
 
-const unsigned long RELAY_CHECK_INTERVAL_MS   = 100;
-const unsigned long STATUS_PRINT_INTERVAL_MS  = 1000;
-const unsigned long LCD_UPDATE_INTERVAL_MS    = 500;
+const unsigned long RELAY_CHECK_INTERVAL_MS = 100;
+const unsigned long STATUS_PRINT_INTERVAL_MS = 1000;
+const unsigned long LCD_UPDATE_INTERVAL_MS = 500;
 const unsigned long SENSOR_UPLOAD_INTERVAL_MS = 1000;
 const unsigned long FIREBASE_READ_INTERVAL_MS = 1000;
 
@@ -145,381 +145,356 @@ float firebaseAcsVoltage = 0;
 // LCD RAW
 // ======================================================
 
-void lcdWriteRaw(uint8_t value)
-{
-    I2C_LCD.beginTransmission(LCD_ADDRESS);
-    I2C_LCD.write(value | lcdBacklight);
-    I2C_LCD.endTransmission();
+void lcdWriteRaw(uint8_t value) {
+  I2C_LCD.beginTransmission(LCD_ADDRESS);
+  I2C_LCD.write(value | lcdBacklight);
+  I2C_LCD.endTransmission();
 
-    delayMicroseconds(50);
+  delayMicroseconds(50);
 }
 
 // ======================================================
 // LCD ENABLE
 // ======================================================
 
-void lcdPulseEnable(uint8_t value)
-{
-    lcdWriteRaw(value | 0x04);
+void lcdPulseEnable(uint8_t value) {
+  lcdWriteRaw(value | 0x04);
 
-    delayMicroseconds(1);
+  delayMicroseconds(1);
 
-    lcdWriteRaw(value & ~0x04);
+  lcdWriteRaw(value & ~0x04);
 
-    delayMicroseconds(50);
+  delayMicroseconds(50);
 }
 
 // ======================================================
 // LCD 4 BIT
 // ======================================================
 
-void lcdWrite4Bits(uint8_t value)
-{
-    lcdWriteRaw(value);
-    lcdPulseEnable(value);
+void lcdWrite4Bits(uint8_t value) {
+  lcdWriteRaw(value);
+  lcdPulseEnable(value);
 }
 
 // ======================================================
 // LCD SEND
 // ======================================================
 
-void lcdSend(uint8_t value, uint8_t mode)
-{
-    uint8_t highNibble = value & 0xF0;
-    uint8_t lowNibble = (value << 4) & 0xF0;
+void lcdSend(uint8_t value, uint8_t mode) {
+  uint8_t highNibble = value & 0xF0;
+  uint8_t lowNibble = (value << 4) & 0xF0;
 
-    lcdWrite4Bits(highNibble | mode);
-    lcdWrite4Bits(lowNibble | mode);
+  lcdWrite4Bits(highNibble | mode);
+  lcdWrite4Bits(lowNibble | mode);
 }
 
 // ======================================================
 // LCD COMMAND
 // ======================================================
 
-void lcdCommand(uint8_t command)
-{
-    lcdSend(command, 0x00);
+void lcdCommand(uint8_t command) {
+  lcdSend(command, 0x00);
 }
 
 // ======================================================
 // LCD DATA
 // ======================================================
 
-void lcdData(uint8_t data)
-{
-    lcdSend(data, 0x01);
+void lcdData(uint8_t data) {
+  lcdSend(data, 0x01);
 }
 
 // ======================================================
 // LCD INIT
 // ======================================================
 
-void lcdInit()
-{
-    delay(50);
+void lcdInit() {
+  delay(50);
 
-    lcdWrite4Bits(0x30);
-    delay(5);
+  lcdWrite4Bits(0x30);
+  delay(5);
 
-    lcdWrite4Bits(0x30);
-    delayMicroseconds(150);
+  lcdWrite4Bits(0x30);
+  delayMicroseconds(150);
 
-    lcdWrite4Bits(0x30);
-    delayMicroseconds(150);
+  lcdWrite4Bits(0x30);
+  delayMicroseconds(150);
 
-    lcdWrite4Bits(0x20);
+  lcdWrite4Bits(0x20);
 
-    lcdCommand(0x28);
-    lcdCommand(0x08);
+  lcdCommand(0x28);
+  lcdCommand(0x08);
 
-    lcdCommand(0x01);
-    delay(2);
+  lcdCommand(0x01);
+  delay(2);
 
-    lcdCommand(0x06);
-    lcdCommand(0x0C);
+  lcdCommand(0x06);
+  lcdCommand(0x0C);
 }
 
 // ======================================================
 // LCD CLEAR
 // ======================================================
 
-void lcdClear()
-{
-    lcdCommand(0x01);
-    delay(2);
+void lcdClear() {
+  lcdCommand(0x01);
+  delay(2);
 }
 
 // ======================================================
 // LCD CURSOR
 // ======================================================
 
-void lcdSetCursor(uint8_t col, uint8_t row)
-{
-    static const uint8_t rowOffsets[] =
-    {
-        0x00,
-        0x40,
-        0x14,
-        0x54
-    };
+void lcdSetCursor(uint8_t col, uint8_t row) {
+  static const uint8_t rowOffsets[] = {
+    0x00,
+    0x40,
+    0x14,
+    0x54
+  };
 
-    if (row > 3)
-        row = 3;
+  if (row > 3)
+    row = 3;
 
-    lcdCommand(0x80 | (col + rowOffsets[row]));
+  lcdCommand(0x80 | (col + rowOffsets[row]));
 }
 
 // ======================================================
 // LCD PRINT
 // ======================================================
 
-void lcdPrint(const String &text)
-{
-    for (size_t i = 0; i < text.length(); i++)
-        lcdData(text[i]);
+void lcdPrint(const String &text) {
+  for (size_t i = 0; i < text.length(); i++)
+    lcdData(text[i]);
 }
 
 // ======================================================
 // LCD LINE
 // ======================================================
 
-void lcdLine(int row, const String &text)
-{
-    String line = text;
+void lcdLine(int row, const String &text) {
+  String line = text;
 
-    if (line.length() > 20)
-        line = line.substring(0, 20);
+  if (line.length() > 20)
+    line = line.substring(0, 20);
 
-    while (line.length() < 20)
-        line += ' ';
+  while (line.length() < 20)
+    line += ' ';
 
-    lcdSetCursor(0, row);
-    lcdPrint(line);
+  lcdSetCursor(0, row);
+  lcdPrint(line);
 }
 
 // ======================================================
 // CENTER TEXT
 // ======================================================
 
-String centerText(const String &txt, int width = 20)
-{
-    int pad = width - (int)txt.length();
+String centerText(const String &txt, int width = 20) {
+  int pad = width - (int)txt.length();
 
-    if (pad <= 0)
-        return txt.substring(0, width);
+  if (pad <= 0)
+    return txt.substring(0, width);
 
-    int left = pad / 2;
-    int right = pad - left;
+  int left = pad / 2;
+  int right = pad - left;
 
-    String out = "";
+  String out = "";
 
-    for (int k = 0; k < left; k++)
-        out += ' ';
+  for (int k = 0; k < left; k++)
+    out += ' ';
 
-    out += txt;
+  out += txt;
 
-    for (int k = 0; k < right; k++)
-        out += ' ';
+  for (int k = 0; k < right; k++)
+    out += ' ';
 
-    return out;
+  return out;
 }
 
 // ======================================================
 // LCD OPENING
 // ======================================================
 
-void lcdOpening()
-{
-    lcdClear();
+void lcdOpening() {
+  lcdClear();
 
-    lcdLine(0, "====================");
-    lcdLine(1, centerText("MICROCELL"));
-    lcdLine(2, centerText("Smart Monitoring"));
-    lcdLine(3, "====================");
+  lcdLine(0, "====================");
+  lcdLine(1, centerText("MICROCELL"));
+  lcdLine(2, centerText("Smart Monitoring"));
+  lcdLine(3, "====================");
 
-    delay(1500);
+  delay(1500);
 }
 
 // ======================================================
 // WIFI MANAGER
 // ======================================================
 
-bool connectWiFi()
-{
+bool connectWiFi() {
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("      MICROCELL WIFI MANAGER");
+  Serial.println("================================");
+
+  lcdClear();
+
+  lcdLine(0, "[ WiFi Manager ]");
+  lcdLine(1, "Mencari WiFi...");
+
+  // --------------------------------------------------
+  // BATAS WAKTU PORTAL 3 MENIT
+  // --------------------------------------------------
+
+  wifiManager.setConfigPortalTimeout(180);
+
+  // --------------------------------------------------
+  // ACCESS POINT KONFIGURASI
+  // --------------------------------------------------
+
+  // SSID : MICROCELL-SETUP
+  // PASSWORD : microcell123
+
+  bool connected = wifiManager.autoConnect(
+    "MICROCELL-SETUP",
+    "microcell123");
+
+  if (!connected) {
     Serial.println();
-    Serial.println("================================");
-    Serial.println("      MICROCELL WIFI MANAGER");
-    Serial.println("================================");
+    Serial.println("WiFi gagal terhubung.");
 
-    lcdClear();
-
-    lcdLine(0, "[ WiFi Manager ]");
-    lcdLine(1, "Mencari WiFi...");
-
-    // --------------------------------------------------
-    // BATAS WAKTU PORTAL 3 MENIT
-    // --------------------------------------------------
-
-    wifiManager.setConfigPortalTimeout(180);
-
-    // --------------------------------------------------
-    // ACCESS POINT KONFIGURASI
-    // --------------------------------------------------
-
-    // SSID : MICROCELL-SETUP
-    // PASSWORD : microcell123
-
-    bool connected = wifiManager.autoConnect(
-        "MICROCELL-SETUP",
-        "microcell123"
-    );
-
-    if (!connected)
-    {
-        Serial.println();
-        Serial.println("WiFi gagal terhubung.");
-
-        lcdLine(2, "WiFi: GAGAL");
-        lcdLine(3, "Restart ESP32...");
-
-        delay(2000);
-
-        ESP.restart();
-
-        return false;
-    }
-
-    Serial.println();
-    Serial.println("WiFi Connected");
-
-    Serial.print("SSID : ");
-    Serial.println(WiFi.SSID());
-
-    Serial.print("IP   : ");
-    Serial.println(WiFi.localIP());
-
-    Serial.print("RSSI : ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
-
-    lcdClear();
-
-    lcdLine(0, "[ WiFi Terhubung ]");
-    lcdLine(1, "SSID: " + WiFi.SSID());
-    lcdLine(2, "Status: Connected");
-    lcdLine(3, "IP: " + WiFi.localIP().toString());
+    lcdLine(2, "WiFi: GAGAL");
+    lcdLine(3, "Restart ESP32...");
 
     delay(2000);
 
-    return true;
+    ESP.restart();
+
+    return false;
+  }
+
+  Serial.println();
+  Serial.println("WiFi Connected");
+
+  Serial.print("SSID : ");
+  Serial.println(WiFi.SSID());
+
+  Serial.print("IP   : ");
+  Serial.println(WiFi.localIP());
+
+  Serial.print("RSSI : ");
+  Serial.print(WiFi.RSSI());
+  Serial.println(" dBm");
+
+  lcdClear();
+
+  lcdLine(0, "[ WiFi Terhubung ]");
+  lcdLine(1, "SSID: " + WiFi.SSID());
+  lcdLine(2, "Status: Connected");
+  lcdLine(3, "IP: " + WiFi.localIP().toString());
+
+  delay(2000);
+
+  return true;
 }
 
 // ======================================================
 // FIREBASE CONNECTION
 // ======================================================
 
-bool connectFirebase()
-{
-    lcdClear();
+bool connectFirebase() {
+  lcdClear();
 
-    lcdLine(0, "[ Firebase Login ]");
-    lcdLine(1, "Menghubungkan...");
+  lcdLine(0, "[ Firebase Login ]");
+  lcdLine(1, "Menghubungkan...");
 
-    config.api_key = API_KEY;
-    config.database_url = DATABASE_URL;
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
 
-    auth.user.email = USER_EMAIL;
-    auth.user.password = USER_PASSWORD;
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
 
-    config.token_status_callback = tokenStatusCallback;
+  config.token_status_callback = tokenStatusCallback;
 
-    Firebase.begin(&config, &auth);
-    Firebase.reconnectWiFi(true);
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
 
-    Serial.println("Waiting Firebase Login...");
+  Serial.println("Waiting Firebase Login...");
 
-    unsigned long start = millis();
-    int dotCount = 0;
+  unsigned long start = millis();
+  int dotCount = 0;
 
-    while (
-        !Firebase.ready() &&
-        millis() - start < FIREBASE_LOGIN_TIMEOUT_MS
-    )
-    {
-        String dots = "";
+  while (
+    !Firebase.ready() && millis() - start < FIREBASE_LOGIN_TIMEOUT_MS) {
+    String dots = "";
 
-        for (int d = 0; d < (dotCount % 4) + 1; d++)
-            dots += '.';
+    for (int d = 0; d < (dotCount % 4) + 1; d++)
+      dots += '.';
 
-        lcdLine(2, "Autentikasi" + dots);
+    lcdLine(2, "Autentikasi" + dots);
 
-        dotCount++;
+    dotCount++;
 
-        delay(500);
-    }
+    delay(500);
+  }
 
-    if (Firebase.ready())
-    {
-        Serial.println();
-        Serial.println("Firebase Connected");
-
-        lcdLine(2, "Status: Ready!");
-        lcdLine(3, "Memulai sistem...");
-
-        delay(1500);
-
-        return true;
-    }
-
+  if (Firebase.ready()) {
     Serial.println();
-    Serial.println("Firebase Login Failed");
+    Serial.println("Firebase Connected");
 
-    lcdLine(2, "Status: GAGAL!");
-    lcdLine(3, "Cek Kredensial");
+    lcdLine(2, "Status: Ready!");
+    lcdLine(3, "Memulai sistem...");
 
     delay(1500);
 
-    return false;
+    return true;
+  }
+
+  Serial.println();
+  Serial.println("Firebase Login Failed");
+
+  lcdLine(2, "Status: GAGAL!");
+  lcdLine(3, "Cek Kredensial");
+
+  delay(1500);
+
+  return false;
 }
 
 // ======================================================
 // SYSTEM READY
 // ======================================================
 
-void lcdSystemReady()
-{
-    lcdClear();
+void lcdSystemReady() {
+  lcdClear();
 
-    lcdLine(0, "====================");
-    lcdLine(1, centerText("SISTEM SIAP"));
-    lcdLine(2, centerText("Memuat dashboard"));
-    lcdLine(3, "====================");
+  lcdLine(0, "====================");
+  lcdLine(1, centerText("SISTEM SIAP"));
+  lcdLine(2, centerText("Memuat dashboard"));
+  lcdLine(3, "====================");
 
-    delay(1000);
+  delay(1000);
 }
 
 // ======================================================
 // WIFI LOST
 // ======================================================
 
-void lcdWifiLost()
-{
-    lcdClear();
+void lcdWifiLost() {
+  lcdClear();
 
-    lcdLine(0, "[ WiFi Terputus ]");
-    lcdLine(1, "Mencoba reconnect...");
+  lcdLine(0, "[ WiFi Terputus ]");
+  lcdLine(1, "Mencoba reconnect...");
 }
 
 // ======================================================
 // FIREBASE LOST
 // ======================================================
 
-void lcdFirebaseLost()
-{
-    lcdClear();
+void lcdFirebaseLost() {
+  lcdClear();
 
-    lcdLine(0, "[ Firebase Offline ]");
-    lcdLine(1, "Menunggu koneksi...");
+  lcdLine(0, "[ Firebase Offline ]");
+  lcdLine(1, "Menunggu koneksi...");
 }
 
 // ======================================================
@@ -527,214 +502,227 @@ void lcdFirebaseLost()
 // MENGAMBIL DATA DARI FIREBASE
 // ======================================================
 
-void displayMainScreen()
-{
-    char buf[21];
+void displayMainScreen() {
+  char buf[21];
 
-    // ==================================================
-    // BARIS 1
-    // ==================================================
+  // ==================================================
+  // BARIS 1
+  // ==================================================
 
-    snprintf(
-        buf,
-        sizeof(buf),
-        "V:%6.2fV I:%5.0fmA",
-        firebaseVoltage,
-        firebaseCurrent
-    );
+  snprintf(
+    buf,
+    sizeof(buf),
+    "V:%6.2fV I:%5.0fmA",
+    firebaseVoltage,
+    firebaseCurrent);
 
-    lcdLine(0, buf);
+  lcdLine(0, buf);
 
-    // ==================================================
-    // BARIS 2
-    // ==================================================
+  // ==================================================
+  // BARIS 2
+  // ==================================================
 
-    snprintf(
-        buf,
-        sizeof(buf),
-        "P:%7.0fmW",
-        firebasePower
-    );
+  snprintf(
+    buf,
+    sizeof(buf),
+    "P:%7.0fmW",
+    firebasePower);
 
-    lcdLine(1, buf);
+  lcdLine(1, buf);
 
-    // ==================================================
-    // BARIS 3
-    // ==================================================
+  // ==================================================
+  // BARIS 3
+  // ==================================================
 
-    snprintf(
-        buf,
-        sizeof(buf),
-        "ACS:%5.2fA",
-        firebaseAcsCurrent
-    );
+  snprintf(
+    buf,
+    sizeof(buf),
+    "ACS:%5.2fA",
+    firebaseAcsCurrent);
 
-    lcdLine(2, buf);
+  lcdLine(2, buf);
 
-    // ==================================================
-    // BARIS 4
-    // ==================================================
+  // ==================================================
+  // BARIS 4
+  // ==================================================
 
-    snprintf(
-        buf,
-        sizeof(buf),
-        "R1:%-3s R2:%-3s",
-        relay1State ? "ON" : "OFF",
-        relay2State ? "ON" : "OFF"
-    );
+  snprintf(
+    buf,
+    sizeof(buf),
+    "R1:%-3s R2:%-3s",
+    relay1State ? "ON" : "OFF",
+    relay2State ? "ON" : "OFF");
 
-    lcdLine(3, buf);
+  lcdLine(3, buf);
 }
 
 // ======================================================
 // READ SENSOR ASLI
 // ======================================================
 
-void readSensor()
-{
-    if (!ina219Ready)
-        return;
+void readSensor() {
+  if (!ina219Ready)
+    return;
 
-    voltage = ina219.getBusVoltage_V();
+  voltage = ina219.getBusVoltage_V();
 
-    current = ina219.getCurrent_mA() / 1000.0;
+  current = ina219.getCurrent_mA() / 1000.0;
 
-    power = voltage * current;
+  power = voltage * current;
 }
 
 // ======================================================
 // READ ACS ASLI
 // ======================================================
 
-void readACS()
-{
-    long totalADC = 0;
+float readACSVoltage() {
+  const int samples = 100;
+  uint32_t totalMilliVolts = 0;
 
-    for (int i = 0; i < 100; i++)
-    {
-        totalADC += analogRead(ACS_PIN);
+  for (int i = 0; i < samples; i++) {
+    totalMilliVolts += analogReadMilliVolts(ACS_PIN);
+    delayMicroseconds(200);
+  }
 
-        delayMicroseconds(200);
-    }
+  // Tegangan aktual pada pin ADC (Volt)
+  float adcVoltage =
+    (totalMilliVolts / (float)samples) / 1000.0;
 
-    acsRaw = totalADC / 100;
-
-    acsVoltage =
-        (acsRaw / 4095.0) *
-        ACS_VCC;
-
-    acsCurrent =
-        (acsVoltage - acsZeroVoltage) /
-        ACS_SENSITIVITY;
-
-    if (fabs(acsCurrent) < 0.05)
-        acsCurrent = 0;
+  // Rekonstruksi tegangan output asli ACS712
+  return adcVoltage * ACS_DIVIDER_GAIN;
 }
+
+// ======================================================
+// CALIBRATION ACS712
+// Jalankan ketika tidak ada arus pada jalur sensor
+// ======================================================
+
+void calibrateACSZero() {
+  const int samples = 500;
+  float totalVoltage = 0;
+
+  delay(500);
+
+  for (int i = 0; i < samples; i++) {
+    totalVoltage += readACSVoltage();
+    delay(2);
+  }
+
+  acsZeroVoltage = totalVoltage / samples;
+
+  Serial.println("===== ACS712 CALIBRATION =====");
+  Serial.print("Zero Current Voltage: ");
+  Serial.print(acsZeroVoltage, 3);
+  Serial.println(" V");
+  Serial.println("==============================");
+}
+
+// ======================================================
+// READ ACS712
+// ======================================================
+
+void readACS() {
+  acsRaw = analogRead(ACS_PIN);
+
+  // Baca tegangan output sensor
+  acsVoltage = readACSVoltage();
+
+  // Hitung arus berdasarkan tegangan offset
+  acsCurrent =
+    (acsVoltage - acsZeroVoltage) / ACS_SENSITIVITY;
+
+  // Hilangkan noise arus yang sangat kecil
+  if (fabs(acsCurrent) < 0.05) {
+    acsCurrent = 0;
+  }
+}
+
 
 // ======================================================
 // UPLOAD DUMMY DATA KE FIREBASE
 // KONDISI SUMBER SEKITAR 9V
 // ======================================================
 
-void uploadSensor()
-{
-    if (
-        millis() - lastSensorUploadMillis <
-        SENSOR_UPLOAD_INTERVAL_MS
-    )
-    {
-        return;
-    }
+void uploadSensor() {
+  if (
+    millis() - lastSensorUploadMillis < SENSOR_UPLOAD_INTERVAL_MS) {
+    return;
+  }
 
-    lastSensorUploadMillis = millis();
+  lastSensorUploadMillis = millis();
 
-    if (!Firebase.ready())
-        return;
+  if (!Firebase.ready())
+    return;
 
-    // Baca sensor asli terlebih dahulu
-    readSensor();
-    readACS();
+  // Baca sensor asli terlebih dahulu
+  readSensor();
+  readACS();
 
-    // ==================================================
-    // UPLOAD VOLTAGE (INA219)
-    // ==================================================
+  // ==================================================
+  // UPLOAD VOLTAGE (INA219)
+  // ==================================================
 
-    if (
-        !Firebase.RTDB.setFloat(
-            &fbdo,
-            "/devices/main/sensors/ina1/voltage",
-            voltage
-        )
-    )
-    {
-        Serial.print("Upload Voltage Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    !Firebase.RTDB.setFloat(
+      &fbdo,
+      "/devices/main/sensors/ina1/voltage",
+      voltage)) {
+    Serial.print("Upload Voltage Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // UPLOAD CURRENT (INA219 - mA)
-    // ==================================================
+  // ==================================================
+  // UPLOAD CURRENT (INA219 - mA)
+  // ==================================================
 
-    if (
-        !Firebase.RTDB.setFloat(
-            &fbdo,
-            "/devices/main/sensors/ina1/current",
-            current * 1000.0
-        )
-    )
-    {
-        Serial.print("Upload Current Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    !Firebase.RTDB.setFloat(
+      &fbdo,
+      "/devices/main/sensors/ina1/current",
+      current * 1000.0)) {
+    Serial.print("Upload Current Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // UPLOAD POWER
-    // mW
-    // ==================================================
+  // ==================================================
+  // UPLOAD POWER
+  // mW
+  // ==================================================
 
-    if (
-        !Firebase.RTDB.setFloat(
-            &fbdo,
-            "/devices/main/sensors/ina1/power",
-            power * 1000.0
-        )
-    )
-    {
-        Serial.print("Upload Power Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    !Firebase.RTDB.setFloat(
+      &fbdo,
+      "/devices/main/sensors/ina1/power",
+      power * 1000.0)) {
+    Serial.print("Upload Power Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // UPLOAD ACS CURRENT
-    // ==================================================
+  // ==================================================
+  // UPLOAD ACS CURRENT
+  // ==================================================
 
-    if (
-        !Firebase.RTDB.setFloat(
-            &fbdo,
-            "/devices/main/sensors/acs1/current",
-            acsCurrent
-        )
-    )
-    {
-        Serial.print("Upload ACS Current Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    !Firebase.RTDB.setFloat(
+      &fbdo,
+      "/devices/main/sensors/acs1/current",
+      acsCurrent)) {
+    Serial.print("Upload ACS Current Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // UPLOAD ACS VOLTAGE
-    // ==================================================
+  // ==================================================
+  // UPLOAD ACS VOLTAGE
+  // ==================================================
 
-    if (
-        !Firebase.RTDB.setFloat(
-            &fbdo,
-            "/devices/main/sensors/acs1/voltage",
-            acsVoltage
-        )
-    )
-    {
-        Serial.print("Upload ACS Voltage Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    !Firebase.RTDB.setFloat(
+      &fbdo,
+      "/devices/main/sensors/acs1/voltage",
+      acsVoltage)) {
+    Serial.print("Upload ACS Voltage Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 }
 
 // ======================================================
@@ -742,209 +730,173 @@ void uploadSensor()
 // DATA INI DIGUNAKAN LCD
 // ======================================================
 
-void readFirebaseSensor()
-{
-    if (
-        millis() - lastFirebaseReadMillis <
-        FIREBASE_READ_INTERVAL_MS
-    )
-    {
-        return;
-    }
+void readFirebaseSensor() {
+  if (
+    millis() - lastFirebaseReadMillis < FIREBASE_READ_INTERVAL_MS) {
+    return;
+  }
 
-    lastFirebaseReadMillis = millis();
+  lastFirebaseReadMillis = millis();
 
-    if (!Firebase.ready())
-        return;
+  if (!Firebase.ready())
+    return;
 
-    // ==================================================
-    // VOLTAGE
-    // ==================================================
+  // ==================================================
+  // VOLTAGE
+  // ==================================================
 
-    if (
-        Firebase.RTDB.getFloat(
-            &fbdo,
-            "/devices/main/sensors/ina1/voltage"
-        )
-    )
-    {
-        firebaseVoltage = fbdo.floatData();
-    }
-    else
-    {
-        Serial.print("Read Voltage Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    Firebase.RTDB.getFloat(
+      &fbdo,
+      "/devices/main/sensors/ina1/voltage")) {
+    firebaseVoltage = fbdo.floatData();
+  } else {
+    Serial.print("Read Voltage Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // CURRENT
-    // ==================================================
+  // ==================================================
+  // CURRENT
+  // ==================================================
 
-    if (
-        Firebase.RTDB.getFloat(
-            &fbdo,
-            "/devices/main/sensors/ina1/current"
-        )
-    )
-    {
-        firebaseCurrent = fbdo.floatData();
-    }
-    else
-    {
-        Serial.print("Read Current Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    Firebase.RTDB.getFloat(
+      &fbdo,
+      "/devices/main/sensors/ina1/current")) {
+    firebaseCurrent = fbdo.floatData();
+  } else {
+    Serial.print("Read Current Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // POWER
-    // ==================================================
+  // ==================================================
+  // POWER
+  // ==================================================
 
-    if (
-        Firebase.RTDB.getFloat(
-            &fbdo,
-            "/devices/main/sensors/ina1/power"
-        )
-    )
-    {
-        firebasePower = fbdo.floatData();
-    }
-    else
-    {
-        Serial.print("Read Power Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    Firebase.RTDB.getFloat(
+      &fbdo,
+      "/devices/main/sensors/ina1/power")) {
+    firebasePower = fbdo.floatData();
+  } else {
+    Serial.print("Read Power Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // ACS CURRENT
-    // ==================================================
+  // ==================================================
+  // ACS CURRENT
+  // ==================================================
 
-    if (
-        Firebase.RTDB.getFloat(
-            &fbdo,
-            "/devices/main/sensors/acs1/current"
-        )
-    )
-    {
-        firebaseAcsCurrent = fbdo.floatData();
-    }
-    else
-    {
-        Serial.print("Read ACS Current Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    Firebase.RTDB.getFloat(
+      &fbdo,
+      "/devices/main/sensors/acs1/current")) {
+    firebaseAcsCurrent = fbdo.floatData();
+  } else {
+    Serial.print("Read ACS Current Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 
-    // ==================================================
-    // ACS VOLTAGE
-    // ==================================================
+  // ==================================================
+  // ACS VOLTAGE
+  // ==================================================
 
-    if (
-        Firebase.RTDB.getFloat(
-            &fbdo,
-            "/devices/main/sensors/acs1/voltage"
-        )
-    )
-    {
-        firebaseAcsVoltage = fbdo.floatData();
-    }
-    else
-    {
-        Serial.print("Read ACS Voltage Error: ");
-        Serial.println(fbdo.errorReason());
-    }
+  if (
+    Firebase.RTDB.getFloat(
+      &fbdo,
+      "/devices/main/sensors/acs1/voltage")) {
+    firebaseAcsVoltage = fbdo.floatData();
+  } else {
+    Serial.print("Read ACS Voltage Error: ");
+    Serial.println(fbdo.errorReason());
+  }
 }
 
 // ======================================================
 // SERIAL STATUS
 // ======================================================
 
-void printConnectionIndicator()
-{
-    if (
-        millis() - lastStatusPrintMillis <
-        STATUS_PRINT_INTERVAL_MS
-    )
-    {
-        return;
-    }
+void printConnectionIndicator() {
+  if (
+    millis() - lastStatusPrintMillis < STATUS_PRINT_INTERVAL_MS) {
+    return;
+  }
 
-    lastStatusPrintMillis = millis();
+  lastStatusPrintMillis = millis();
 
-    bool wifiOk =
-        WiFi.status() == WL_CONNECTED;
+  bool wifiOk =
+    WiFi.status() == WL_CONNECTED;
 
-    bool fbOk =
-        Firebase.ready();
+  bool fbOk =
+    Firebase.ready();
 
-    Serial.print("[STATUS] WiFi: ");
-    Serial.print(
-        wifiOk ? "CONNECTED" : "DISCONNECTED"
-    );
+  Serial.print("[STATUS] WiFi: ");
+  Serial.print(
+    wifiOk ? "CONNECTED" : "DISCONNECTED");
 
-    Serial.print(" | SSID: ");
+  Serial.print(" | SSID: ");
 
-    if (wifiOk)
-        Serial.print(WiFi.SSID());
-    else
-        Serial.print("-");
+  if (wifiOk)
+    Serial.print(WiFi.SSID());
+  else
+    Serial.print("-");
 
-    Serial.print(" | Firebase: ");
-    Serial.print(
-        fbOk ? "CONNECTED" : "DISCONNECTED"
-    );
+  Serial.print(" | Firebase: ");
+  Serial.print(
+    fbOk ? "CONNECTED" : "DISCONNECTED");
 
-    Serial.print(" | INA219: ");
-    Serial.println(
-        ina219Ready ? "OK" : "ERROR"
-    );
+  Serial.print(" | INA219: ");
+  Serial.println(
+    ina219Ready ? "OK" : "ERROR");
 
-    // ==================================================
-    // SENSOR ASLI
-    // ==================================================
+  // ==================================================
+  // SENSOR ASLI
+  // ==================================================
 
-    Serial.print("Sensor Voltage: ");
-    Serial.print(voltage, 3);
+  Serial.print("Sensor Voltage: ");
+  Serial.print(voltage, 3);
 
-    Serial.print(" V | Sensor Current: ");
-    Serial.print(current * 1000.0, 2);
+  Serial.print(" V | Sensor Current: ");
+  Serial.print(current * 1000.0, 2);
 
-    Serial.print(" mA | Sensor Power: ");
-    Serial.print(power * 1000.0, 2);
+  Serial.print(" mA | Sensor Power: ");
+  Serial.print(power * 1000.0, 2);
 
-    Serial.println(" mW");
+  Serial.println(" mW");
 
-    Serial.print("ACS RAW: ");
-    Serial.print(acsRaw);
+  Serial.print("ACS RAW: ");
+  Serial.print(acsRaw);
 
-    Serial.print(" | ACS Voltage: ");
-    Serial.print(acsVoltage, 3);
+  Serial.print(" | ACS Voltage: ");
+  Serial.print(acsVoltage, 3);
 
-    Serial.print(" V | ACS Current: ");
-    Serial.print(acsCurrent, 3);
+  Serial.print(" V | ACS Current: ");
+  Serial.print(acsCurrent, 3);
 
-    Serial.println(" A");
+  Serial.println(" A");
 
-    // ==================================================
-    // DATA FIREBASE
-    // ==================================================
+  // ==================================================
+  // DATA FIREBASE
+  // ==================================================
 
-    Serial.print("Firebase Voltage: ");
-    Serial.print(firebaseVoltage, 3);
+  Serial.print("Firebase Voltage: ");
+  Serial.print(firebaseVoltage, 3);
 
-    Serial.print(" V | Firebase Current: ");
-    Serial.print(firebaseCurrent, 2);
+  Serial.print(" V | Firebase Current: ");
+  Serial.print(firebaseCurrent, 2);
 
-    Serial.print(" mA | Firebase Power: ");
-    Serial.print(firebasePower, 2);
+  Serial.print(" mA | Firebase Power: ");
+  Serial.print(firebasePower, 2);
 
-    Serial.println(" mW");
+  Serial.println(" mW");
 
-    Serial.print("Firebase ACS Current: ");
-    Serial.print(firebaseAcsCurrent, 3);
+  Serial.print("Firebase ACS Current: ");
+  Serial.print(firebaseAcsCurrent, 3);
 
-    Serial.print(" A | Firebase ACS Voltage: ");
-    Serial.print(firebaseAcsVoltage, 3);
+  Serial.print(" A | Firebase ACS Voltage: ");
+  Serial.print(firebaseAcsVoltage, 3);
 
-    Serial.println(" V");
+  Serial.println(" V");
 }
 
 // ======================================================
@@ -952,390 +904,364 @@ void printConnectionIndicator()
 // ======================================================
 
 void handleRelay(
-    const char *relayPath,
-    const char *statusPath,
-    int pin,
-    bool &stateOut
-)
-{
-    if (
-        Firebase.RTDB.getBool(
-            &fbdo,
-            relayPath
-        )
-    )
-    {
-        bool newState =
-            fbdo.boolData();
+  const char *relayPath,
+  const char *statusPath,
+  int pin,
+  bool &stateOut) {
+  if (
+    Firebase.RTDB.getBool(
+      &fbdo,
+      relayPath)) {
+    bool newState =
+      fbdo.boolData();
 
-        if (newState != stateOut)
-        {
-            Serial.print(relayPath);
-            Serial.print(" -> ");
-            Serial.println(
-                newState ? "ON" : "OFF"
-            );
-        }
-
-        stateOut = newState;
-
-        digitalWrite(
-            pin,
-            newState ? LOW : HIGH
-        );
-
-        Firebase.RTDB.setBool(
-            &fbdo,
-            statusPath,
-            newState
-        );
+    if (newState != stateOut) {
+      Serial.print(relayPath);
+      Serial.print(" -> ");
+      Serial.println(
+        newState ? "ON" : "OFF");
     }
-    else
-    {
-        Serial.print("Relay Error (");
-        Serial.print(relayPath);
-        Serial.print(") : ");
-        Serial.println(
-            fbdo.errorReason()
-        );
-    }
+
+    stateOut = newState;
+
+    digitalWrite(
+      pin,
+      newState ? LOW : HIGH);
+
+    Firebase.RTDB.setBool(
+      &fbdo,
+      statusPath,
+      newState);
+  } else {
+    Serial.print("Relay Error (");
+    Serial.print(relayPath);
+    Serial.print(") : ");
+    Serial.println(
+      fbdo.errorReason());
+  }
 }
 
 // ======================================================
 // SETUP
 // ======================================================
 
-void setup()
-{
-    Serial.begin(115200);
+void setup() {
+  Serial.begin(115200);
 
-    delay(500);
+  delay(500);
 
-    // ==================================================
-    // ADC
-    // ==================================================
+  // ==================================================
+  // ADC
+  // ==================================================
 
-    analogReadResolution(12);
+  analogReadResolution(12);
 
-    // ==================================================
-    // I2C LCD
-    // ==================================================
+  analogSetPinAttenuation(ACS_PIN, ADC_11db);
 
-    I2C_LCD.begin(
-        LCD_SDA_PIN,
-        LCD_SCL_PIN,
-        100000
-    );
+  pinMode(ACS_PIN, INPUT);
+  calibrateACSZero();
 
-    // ==================================================
-    // I2C INA219
-    // ==================================================
+  // ==================================================
+  // I2C LCD
+  // ==================================================
 
-    I2C_INA.begin(
-        INA_SDA_PIN,
-        INA_SCL_PIN,
-        100000
-    );
+  I2C_LCD.begin(
+    LCD_SDA_PIN,
+    LCD_SCL_PIN,
+    100000);
 
-    // ==================================================
-    // LCD
-    // ==================================================
+  // ==================================================
+  // I2C INA219
+  // ==================================================
 
-    lcdInit();
+  I2C_INA.begin(
+    INA_SDA_PIN,
+    INA_SCL_PIN,
+    100000);
 
-    lcdOpening();
+  // ==================================================
+  // LCD
+  // ==================================================
 
-    // ==================================================
-    // RELAY
-    // ==================================================
+  lcdInit();
 
-    pinMode(
-        RELAY1_PIN,
-        OUTPUT
-    );
+  lcdOpening();
 
-    pinMode(
-        RELAY2_PIN,
-        OUTPUT
-    );
+  // ==================================================
+  // RELAY
+  // ==================================================
 
-    // ==================================================
-    // ACS
-    // ==================================================
+  pinMode(
+    RELAY1_PIN,
+    OUTPUT);
 
-    pinMode(
-        ACS_PIN,
-        INPUT
-    );
+  pinMode(
+    RELAY2_PIN,
+    OUTPUT);
 
-    // ==================================================
-    // RELAY OFF
-    // ==================================================
+  // ==================================================
+  // ACS
+  // ==================================================
 
-    digitalWrite(
-        RELAY1_PIN,
-        HIGH
-    );
+  pinMode(
+    ACS_PIN,
+    INPUT);
 
-    digitalWrite(
-        RELAY2_PIN,
-        HIGH
-    );
+  // ==================================================
+  // RELAY OFF
+  // ==================================================
 
-    // ==================================================
-    // CHECK INA219
-    // ==================================================
+  digitalWrite(
+    RELAY1_PIN,
+    HIGH);
 
-    lcdClear();
+  digitalWrite(
+    RELAY2_PIN,
+    HIGH);
 
-    lcdLine(
-        0,
-        "[ Inisialisasi ]"
-    );
+  // ==================================================
+  // CHECK INA219
+  // ==================================================
 
-    lcdLine(
-        1,
-        "Cek INA219..."
-    );
+  lcdClear();
 
-    ina219Ready =
-        ina219.begin(
-            &I2C_INA
-        );
+  lcdLine(
+    0,
+    "[ Inisialisasi ]");
 
-    if (ina219Ready)
-    {
-        Serial.println("INA219 OK");
+  lcdLine(
+    1,
+    "Cek INA219...");
 
-        lcdLine(
-            2,
-            "INA219: OK"
-        );
-    }
-    else
-    {
-        Serial.println("INA219 ERROR");
+  ina219Ready =
+    ina219.begin(
+      &I2C_INA);
 
-        lcdLine(
-            2,
-            "INA219: ERROR"
-        );
-    }
+  if (ina219Ready) {
+    Serial.println("INA219 OK");
 
     lcdLine(
-        3,
-        "LCD: OK"
-    );
+      2,
+      "INA219: OK");
+  } else {
+    Serial.println("INA219 ERROR");
 
-    delay(1500);
+    lcdLine(
+      2,
+      "INA219: ERROR");
+  }
 
-    // ==================================================
-    // READ SENSOR ASLI
-    // ==================================================
+  lcdLine(
+    3,
+    "LCD: OK");
 
-    readACS();
+  delay(1500);
 
-    Serial.println("ACS OK");
+  // ==================================================
+  // READ SENSOR ASLI
+  // ==================================================
 
-    Serial.print("ACS RAW: ");
-    Serial.println(acsRaw);
+  readACS();
+  Serial.println("===== ACS712 DEBUG =====");
 
-    Serial.print("ACS Voltage: ");
-    Serial.print(acsVoltage, 3);
+  Serial.print("ADC Raw       : ");
+  Serial.println(acsRaw);
 
-    Serial.println(" V");
+  Serial.print("Output Voltage: ");
+  Serial.print(acsVoltage, 3);
+  Serial.println(" V");
 
-    Serial.print("ACS Current: ");
-    Serial.print(acsCurrent, 3);
+  Serial.print("Zero Voltage  : ");
+  Serial.print(acsZeroVoltage, 3);
+  Serial.println(" V");
 
-    Serial.println(" A");
+  Serial.print("Current       : ");
+  Serial.print(acsCurrent, 3);
+  Serial.println(" A");
 
-    // ==================================================
-    // WIFI MANAGER
-    // ==================================================
+  Serial.println("========================");
 
-    if (!connectWiFi())
-    {
-        return;
-    }
+  Serial.println("ACS OK");
 
-    wifiWasConnected = true;
+  Serial.print("ACS RAW: ");
+  Serial.println(acsRaw);
 
-    // ==================================================
-    // FIREBASE
-    // ==================================================
+  Serial.print("ACS Voltage: ");
+  Serial.print(acsVoltage, 3);
 
-    while (!connectFirebase())
-    {
-        delay(300);
-    }
+  Serial.println(" V");
 
-    firebaseWasReady = true;
+  Serial.print("ACS Current: ");
+  Serial.print(acsCurrent, 3);
 
-    // ==================================================
-    // SYSTEM READY
-    // ==================================================
+  Serial.println(" A");
 
-    lcdSystemReady();
+  // ==================================================
+  // WIFI MANAGER
+  // ==================================================
 
-    // ==================================================
-    // READ SENSOR ASLI
-    // ==================================================
+  if (!connectWiFi()) {
+    return;
+  }
 
-    readSensor();
-    readACS();
+  wifiWasConnected = true;
 
-    // ==================================================
-    // FORCE FIRST FIREBASE UPDATE
-    // ==================================================
+  // ==================================================
+  // FIREBASE
+  // ==================================================
 
-    lastSensorUploadMillis =
-        millis() -
-        SENSOR_UPLOAD_INTERVAL_MS;
+  while (!connectFirebase()) {
+    delay(300);
+  }
 
-    lastFirebaseReadMillis =
-        millis() -
-        FIREBASE_READ_INTERVAL_MS;
+  firebaseWasReady = true;
 
-    // ==================================================
-    // UPLOAD DUMMY AWAL
-    // ==================================================
+  // ==================================================
+  // SYSTEM READY
+  // ==================================================
 
-    uploadSensor();
+  lcdSystemReady();
 
-    // ==================================================
-    // READ FIREBASE
-    // ==================================================
+  // ==================================================
+  // READ SENSOR ASLI
+  // ==================================================
 
-    readFirebaseSensor();
+  readSensor();
+  readACS();
+
+  // ==================================================
+  // FORCE FIRST FIREBASE UPDATE
+  // ==================================================
+
+  lastSensorUploadMillis =
+    millis() - SENSOR_UPLOAD_INTERVAL_MS;
+
+  lastFirebaseReadMillis =
+    millis() - FIREBASE_READ_INTERVAL_MS;
+
+  // ==================================================
+  // UPLOAD DUMMY AWAL
+  // ==================================================
+
+  uploadSensor();
+
+  // ==================================================
+  // READ FIREBASE
+  // ==================================================
+
+  readFirebaseSensor();
 }
 
 // ======================================================
 // LOOP
 // ======================================================
 
-void loop()
-{
-    // ==================================================
-    // STATUS
-    // ==================================================
+void loop() {
+  // ==================================================
+  // STATUS
+  // ==================================================
 
-    printConnectionIndicator();
+  printConnectionIndicator();
 
-    // ==================================================
-    // WIFI TERPUTUS
-    // ==================================================
+  // ==================================================
+  // WIFI TERPUTUS
+  // ==================================================
 
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        if (wifiWasConnected)
-        {
-            lcdWifiLost();
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiWasConnected) {
+      lcdWifiLost();
 
-            wifiWasConnected = false;
-        }
-
-        // ----------------------------------------------
-        // Coba reconnect menggunakan kredensial tersimpan
-        // ----------------------------------------------
-
-        WiFi.reconnect();
-
-        delay(1000);
-
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            wifiWasConnected = true;
-
-            Serial.println(
-                "WiFi reconnect berhasil"
-            );
-
-            lcdSystemReady();
-        }
-
-        return;
+      wifiWasConnected = false;
     }
 
-    // ==================================================
-    // FIREBASE
-    // ==================================================
+    // ----------------------------------------------
+    // Coba reconnect menggunakan kredensial tersimpan
+    // ----------------------------------------------
 
-    if (!Firebase.ready())
-    {
-        if (firebaseWasReady)
-        {
-            lcdFirebaseLost();
+    WiFi.reconnect();
 
-            firebaseWasReady = false;
-        }
+    delay(1000);
 
-        return;
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiWasConnected = true;
+
+      Serial.println(
+        "WiFi reconnect berhasil");
+
+      lcdSystemReady();
     }
 
-    if (!firebaseWasReady)
-    {
-        firebaseWasReady = true;
+    return;
+  }
 
-        lcdSystemReady();
+  // ==================================================
+  // FIREBASE
+  // ==================================================
+
+  if (!Firebase.ready()) {
+    if (firebaseWasReady) {
+      lcdFirebaseLost();
+
+      firebaseWasReady = false;
     }
 
-    // ==================================================
-    // RELAY
-    // ==================================================
+    return;
+  }
 
-    if (
-        millis() - lastRelayCheckMillis >=
-        RELAY_CHECK_INTERVAL_MS
-    )
-    {
-        lastRelayCheckMillis = millis();
+  if (!firebaseWasReady) {
+    firebaseWasReady = true;
 
-        handleRelay(
-            "/devices/main/relays/relay1",
-            "/devices/main/status/relay1",
-            RELAY1_PIN,
-            relay1State
-        );
+    lcdSystemReady();
+  }
 
-        handleRelay(
-            "/devices/main/relays/relay2",
-            "/devices/main/status/relay2",
-            RELAY2_PIN,
-            relay2State
-        );
-    }
+  // ==================================================
+  // RELAY
+  // ==================================================
 
-    // ==================================================
-    // SENSOR ASLI
-    // ==================================================
+  if (
+    millis() - lastRelayCheckMillis >= RELAY_CHECK_INTERVAL_MS) {
+    lastRelayCheckMillis = millis();
 
-    readSensor();
-    readACS();
+    handleRelay(
+      "/devices/main/relays/relay1",
+      "/devices/main/status/relay1",
+      RELAY1_PIN,
+      relay1State);
 
-    // ==================================================
-    // DUMMY → FIREBASE
-    // ==================================================
+    handleRelay(
+      "/devices/main/relays/relay2",
+      "/devices/main/status/relay2",
+      RELAY2_PIN,
+      relay2State);
+  }
 
-    uploadSensor();
+  // ==================================================
+  // SENSOR ASLI
+  // ==================================================
 
-    // ==================================================
-    // FIREBASE → ESP32
-    // ==================================================
+  readSensor();
+  readACS();
 
-    readFirebaseSensor();
+  // ==================================================
+  // DUMMY → FIREBASE
+  // ==================================================
 
-    // ==================================================
-    // FIREBASE → LCD
-    // ==================================================
+  uploadSensor();
 
-    if (
-        millis() - lastLcdUpdateMillis >=
-        LCD_UPDATE_INTERVAL_MS
-    )
-    {
-        lastLcdUpdateMillis = millis();
+  // ==================================================
+  // FIREBASE → ESP32
+  // ==================================================
 
-        displayMainScreen();
-    }
+  readFirebaseSensor();
+
+  // ==================================================
+  // FIREBASE → LCD
+  // ==================================================
+
+  if (
+    millis() - lastLcdUpdateMillis >= LCD_UPDATE_INTERVAL_MS) {
+    lastLcdUpdateMillis = millis();
+
+    displayMainScreen();
+  }
 }
