@@ -32,10 +32,20 @@
 const float ACS_SENSITIVITY = 0.185;  // 185 mV/A untuk varian 5A
 const float ACS_DIVIDER_GAIN = 1.5;   // Pembagi tegangan 10k dan 20k
 
+// Debounce status ACS: pin floating kadang terlihat normal sesaat,
+// jadi status butuh pembacaan beruntun sebelum berubah
+const int ACS_GOOD_CONFIRM_READS = 3;  // beruntun valid -> connected
+const int ACS_BAD_CONFIRM_READS = 5;   // beruntun buruk -> tinggalkan connected
+
 float acsZeroVoltage = 2.5;
 float acsVoltage = 0;
 float acsCurrent = 0;
 int acsRaw = 0;
+bool acsValid = false;  // true hanya jika pembacaan ACS712 lolos validasi
+
+// Status ACS hasil validasi nyata: connected / error / disconnected
+const char *acsStatus = "disconnected";
+String lastAcsStatus = "";
 
 // ======================================================
 // LCD
@@ -62,6 +72,10 @@ TwoWire I2C_INA = TwoWire(1);
 // ======================================================
 
 Adafruit_INA219 ina219(0x40);
+
+// Status sensor hasil pemeriksaan nyata, dikirim ke Firebase
+const char *inaStatus = "disconnected";
+String lastInaStatus = "";
 
 // ======================================================
 // SENSOR ASLI
@@ -561,8 +575,41 @@ void displayMainScreen() {
 // ======================================================
 
 void readSensor() {
-  if (!ina219Ready)
+  // Probe I2C: cek apakah INA219 (0x40) masih merespon.
+  // Keberadaan device di bus, bukan nilai current 0,
+  // yang jadi indikator terputus
+  I2C_INA.beginTransmission(0x40);
+
+  bool present = (I2C_INA.endTransmission() == 0);
+
+  if (!present) {
+    if (ina219Ready) {
+      ina219Ready = false;
+
+      Serial.println("INA219 SENSOR ERROR / DISCONNECTED");
+    }
+
+    inaStatus = "disconnected";
+
+    // Jangan perbarui voltage/current/power saat sensor tiada
     return;
+  }
+
+  // Sensor terdeteksi: inisialisasi ulang tanpa restart
+  if (!ina219Ready) {
+    ina219Ready = ina219.begin(&I2C_INA);
+
+    if (!ina219Ready) {
+      // Terdeteksi di bus tapi inisialisasi gagal
+      inaStatus = "error";
+
+      return;
+    }
+
+    Serial.println("INA219 terhubung kembali");
+  }
+
+  inaStatus = "connected";
 
   voltage = ina219.getBusVoltage_V();
 
@@ -608,13 +655,22 @@ void calibrateACSZero() {
     delay(2);
   }
 
-  acsZeroVoltage = totalVoltage / samples;
+  float measuredZero = totalVoltage / samples;
 
-  Serial.println("===== ACS712 CALIBRATION =====");
-  Serial.print("Zero Current Voltage: ");
-  Serial.print(acsZeroVoltage, 3);
-  Serial.println(" V");
-  Serial.println("==============================");
+  // Pin floating saat OUT terlepas memberi nilai di luar rentang
+  // fisik output ACS712 (suplai 5V) - offset tidak diadopsi
+  if (measuredZero > 0.05 && measuredZero < 4.7) {
+    acsZeroVoltage = measuredZero;
+
+    Serial.println("===== ACS712 CALIBRATION =====");
+    Serial.print("Zero Current Voltage: ");
+    Serial.print(acsZeroVoltage, 3);
+    Serial.println(" V");
+    Serial.println("==============================");
+  } else {
+    Serial.println("ACS712 SENSOR ERROR / OUTPUT INVALID");
+    Serial.println("Kalibrasi offset dibatalkan, memakai default 2.5V");
+  }
 }
 
 // ======================================================
@@ -622,18 +678,105 @@ void calibrateACSZero() {
 // ======================================================
 
 void readACS() {
+  const int samples = 3;
+  float totalVoltage = 0;
+  float minVoltage = 999.0;
+  float maxVoltage = -999.0;
+
+  // Beberapa pengambilan terpisah untuk mengukur kestabilan sinyal
+  for (int i = 0; i < samples; i++) {
+    float v = readACSVoltage();
+
+    totalVoltage += v;
+
+    if (v < minVoltage)
+      minVoltage = v;
+
+    if (v > maxVoltage)
+      maxVoltage = v;
+  }
+
+  float meanVoltage = totalVoltage / samples;
+
   acsRaw = analogRead(ACS_PIN);
 
-  // Baca tegangan output sensor
-  acsVoltage = readACSVoltage();
+  // ==================================================
+  // VALIDASI PEMBACAAN
+  // 1. Rentang fisik: output ACS712 bersuplai 5V tidak
+  //    mungkin di bawah ~0V atau di atas ~4.7V.
+  //    Pin ADC floating cenderung menempel ke rail ADC
+  //    (derekonstruksi > 4.7V) atau liar mendekati 0V.
+  // 2. Kestabilan: kabel terpasang memberi bacaan yang
+  //    konsisten antar sampel; pin floating loncat-loncat.
+  // ==================================================
 
-  // Hitung arus berdasarkan tegangan offset
-  acsCurrent =
-    (acsVoltage - acsZeroVoltage) / ACS_SENSITIVITY;
+  bool inRange = (meanVoltage > 0.05 && meanVoltage < 4.7);
+  bool stable = ((maxVoltage - minVoltage) < 0.15);
+  bool valid = inRange && stable;
 
-  // Hilangkan noise arus yang sangat kecil
-  if (fabs(acsCurrent) < 0.05) {
-    acsCurrent = 0;
+  // ==================================================
+  // DEBOUNCE STATUS
+  // Satu pembacaan tidak boleh langsung mengubah status;
+  // pin floating kadang terlihat normal beberapa saat,
+  // jadi perlu pembacaan beruntun untuk berpindah status.
+  // Nilai global hanya diperbarui saat status confirmed.
+  // ==================================================
+
+  static int goodStreak = 0;
+  static int badStreak = 0;
+  const char *prevStatus = acsStatus;
+
+  if (valid) {
+    goodStreak++;
+    badStreak = 0;
+
+    if (goodStreak >= ACS_GOOD_CONFIRM_READS) {
+      acsStatus = "connected";
+      acsVoltage = meanVoltage;
+
+      // Hitung arus berdasarkan tegangan offset
+      acsCurrent =
+        (acsVoltage - acsZeroVoltage) / ACS_SENSITIVITY;
+
+      // Hilangkan noise arus yang sangat kecil
+      if (fabs(acsCurrent) < 0.05) {
+        acsCurrent = 0;
+      }
+    }
+  } else {
+    badStreak++;
+    goodStreak = 0;
+
+    if (badStreak >= ACS_BAD_CONFIRM_READS) {
+      if (inRange) {
+        // Masih dalam rentang fisik tapi sinyal tidak stabil
+        acsStatus = "error";
+      } else {
+        // Di luar rentang fisik: OUT terlepas / pin floating
+        acsStatus = "disconnected";
+      }
+    }
+  }
+
+  acsValid = (strcmp(acsStatus, "connected") == 0);
+
+  if (strcmp(acsStatus, prevStatus) != 0) {
+    if (strcmp(prevStatus, "connected") == 0) {
+      Serial.println("ACS712 SENSOR ERROR / OUTPUT INVALID");
+
+      Serial.print("  Voltage: ");
+      Serial.print(meanVoltage, 3);
+      Serial.print(" V (min ");
+      Serial.print(minVoltage, 3);
+      Serial.print(" / max ");
+      Serial.print(maxVoltage, 3);
+      Serial.println(" V)");
+    }
+
+    Serial.print("ACS712 status: ");
+    Serial.print(prevStatus);
+    Serial.print(" -> ");
+    Serial.println(acsStatus);
   }
 }
 
@@ -659,69 +802,136 @@ void uploadSensor() {
   readACS();
 
   // ==================================================
-  // UPLOAD VOLTAGE (INA219)
+  // UPLOAD INA219
+  // Nilai aktual hanya saat connected. Saat disconnected,
+  // field nilai dihapus (null) dan status diperbarui.
+  // Status hanya ditulis saat berubah.
   // ==================================================
 
-  if (
-    !Firebase.RTDB.setFloat(
-      &fbdo,
-      "/devices/main/sensors/ina1/voltage",
-      voltage)) {
-    Serial.print("Upload Voltage Error: ");
-    Serial.println(fbdo.errorReason());
+  if (strcmp(inaStatus, "connected") == 0) {
+    if (
+      !Firebase.RTDB.setFloat(
+        &fbdo,
+        "/devices/main/sensors/ina1/voltage",
+        voltage)) {
+      Serial.print("Upload Voltage Error: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    if (
+      !Firebase.RTDB.setFloat(
+        &fbdo,
+        "/devices/main/sensors/ina1/current",
+        current * 1000.0)) {
+      Serial.print("Upload Current Error: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    if (
+      !Firebase.RTDB.setFloat(
+        &fbdo,
+        "/devices/main/sensors/ina1/power",
+        power * 1000.0)) {
+      Serial.print("Upload Power Error: ");
+      Serial.println(fbdo.errorReason());
+    }
+  }
+
+  if (lastInaStatus != inaStatus) {
+    if (strcmp(inaStatus, "disconnected") == 0) {
+      if (
+        !Firebase.RTDB.deleteNode(
+          &fbdo,
+          "/devices/main/sensors/ina1/voltage")) {
+        Serial.print("Delete INA Voltage Error: ");
+        Serial.println(fbdo.errorReason());
+      }
+
+      if (
+        !Firebase.RTDB.deleteNode(
+          &fbdo,
+          "/devices/main/sensors/ina1/current")) {
+        Serial.print("Delete INA Current Error: ");
+        Serial.println(fbdo.errorReason());
+      }
+
+      if (
+        !Firebase.RTDB.deleteNode(
+          &fbdo,
+          "/devices/main/sensors/ina1/power")) {
+        Serial.print("Delete INA Power Error: ");
+        Serial.println(fbdo.errorReason());
+      }
+    }
+
+    if (
+      !Firebase.RTDB.setString(
+        &fbdo,
+        "/devices/main/sensors/ina1/status",
+        inaStatus)) {
+      Serial.print("Upload INA Status Error: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    lastInaStatus = inaStatus;
   }
 
   // ==================================================
-  // UPLOAD CURRENT (INA219 - mA)
+  // UPLOAD ACS
+  // Nilai aktual hanya saat connected. Saat disconnected,
+  // field nilai dihapus (null) dan status diperbarui.
+  // Status hanya ditulis saat berubah.
   // ==================================================
 
-  if (
-    !Firebase.RTDB.setFloat(
-      &fbdo,
-      "/devices/main/sensors/ina1/current",
-      current * 1000.0)) {
-    Serial.print("Upload Current Error: ");
-    Serial.println(fbdo.errorReason());
+  if (acsValid) {
+    if (
+      !Firebase.RTDB.setFloat(
+        &fbdo,
+        "/devices/main/sensors/acs1/current",
+        acsCurrent)) {
+      Serial.print("Upload ACS Current Error: ");
+      Serial.println(fbdo.errorReason());
+    }
+
+    if (
+      !Firebase.RTDB.setFloat(
+        &fbdo,
+        "/devices/main/sensors/acs1/voltage",
+        acsVoltage)) {
+      Serial.print("Upload ACS Voltage Error: ");
+      Serial.println(fbdo.errorReason());
+    }
   }
 
-  // ==================================================
-  // UPLOAD POWER
-  // mW
-  // ==================================================
+  if (lastAcsStatus != acsStatus) {
+    if (strcmp(acsStatus, "disconnected") == 0) {
+      if (
+        !Firebase.RTDB.deleteNode(
+          &fbdo,
+          "/devices/main/sensors/acs1/current")) {
+        Serial.print("Delete ACS Current Error: ");
+        Serial.println(fbdo.errorReason());
+      }
 
-  if (
-    !Firebase.RTDB.setFloat(
-      &fbdo,
-      "/devices/main/sensors/ina1/power",
-      power * 1000.0)) {
-    Serial.print("Upload Power Error: ");
-    Serial.println(fbdo.errorReason());
-  }
+      if (
+        !Firebase.RTDB.deleteNode(
+          &fbdo,
+          "/devices/main/sensors/acs1/voltage")) {
+        Serial.print("Delete ACS Voltage Error: ");
+        Serial.println(fbdo.errorReason());
+      }
+    }
 
-  // ==================================================
-  // UPLOAD ACS CURRENT
-  // ==================================================
+    if (
+      !Firebase.RTDB.setString(
+        &fbdo,
+        "/devices/main/sensors/acs1/status",
+        acsStatus)) {
+      Serial.print("Upload ACS Status Error: ");
+      Serial.println(fbdo.errorReason());
+    }
 
-  if (
-    !Firebase.RTDB.setFloat(
-      &fbdo,
-      "/devices/main/sensors/acs1/current",
-      acsCurrent)) {
-    Serial.print("Upload ACS Current Error: ");
-    Serial.println(fbdo.errorReason());
-  }
-
-  // ==================================================
-  // UPLOAD ACS VOLTAGE
-  // ==================================================
-
-  if (
-    !Firebase.RTDB.setFloat(
-      &fbdo,
-      "/devices/main/sensors/acs1/voltage",
-      acsVoltage)) {
-    Serial.print("Upload ACS Voltage Error: ");
-    Serial.println(fbdo.errorReason());
+    lastAcsStatus = acsStatus;
   }
 }
 
@@ -741,74 +951,89 @@ void readFirebaseSensor() {
   if (!Firebase.ready())
     return;
 
+  // Node nilai yang sudah di-null-kan (sensor disconnected)
+  // tidak dibaca, agar tidak spam error ke Serial
+  bool readIna = (strcmp(inaStatus, "connected") == 0);
+  bool readAcs = (strcmp(acsStatus, "connected") == 0);
+
   // ==================================================
   // VOLTAGE
   // ==================================================
 
-  if (
-    Firebase.RTDB.getFloat(
-      &fbdo,
-      "/devices/main/sensors/ina1/voltage")) {
-    firebaseVoltage = fbdo.floatData();
-  } else {
-    Serial.print("Read Voltage Error: ");
-    Serial.println(fbdo.errorReason());
+  if (readIna) {
+    if (
+      Firebase.RTDB.getFloat(
+        &fbdo,
+        "/devices/main/sensors/ina1/voltage")) {
+      firebaseVoltage = fbdo.floatData();
+    } else {
+      Serial.print("Read Voltage Error: ");
+      Serial.println(fbdo.errorReason());
+    }
   }
 
   // ==================================================
   // CURRENT
   // ==================================================
 
-  if (
-    Firebase.RTDB.getFloat(
-      &fbdo,
-      "/devices/main/sensors/ina1/current")) {
-    firebaseCurrent = fbdo.floatData();
-  } else {
-    Serial.print("Read Current Error: ");
-    Serial.println(fbdo.errorReason());
+  if (readIna) {
+    if (
+      Firebase.RTDB.getFloat(
+        &fbdo,
+        "/devices/main/sensors/ina1/current")) {
+      firebaseCurrent = fbdo.floatData();
+    } else {
+      Serial.print("Read Current Error: ");
+      Serial.println(fbdo.errorReason());
+    }
   }
 
   // ==================================================
   // POWER
   // ==================================================
 
-  if (
-    Firebase.RTDB.getFloat(
-      &fbdo,
-      "/devices/main/sensors/ina1/power")) {
-    firebasePower = fbdo.floatData();
-  } else {
-    Serial.print("Read Power Error: ");
-    Serial.println(fbdo.errorReason());
+  if (readIna) {
+    if (
+      Firebase.RTDB.getFloat(
+        &fbdo,
+        "/devices/main/sensors/ina1/power")) {
+      firebasePower = fbdo.floatData();
+    } else {
+      Serial.print("Read Power Error: ");
+      Serial.println(fbdo.errorReason());
+    }
   }
 
   // ==================================================
   // ACS CURRENT
   // ==================================================
 
-  if (
-    Firebase.RTDB.getFloat(
-      &fbdo,
-      "/devices/main/sensors/acs1/current")) {
-    firebaseAcsCurrent = fbdo.floatData();
-  } else {
-    Serial.print("Read ACS Current Error: ");
-    Serial.println(fbdo.errorReason());
+  if (readAcs) {
+    if (
+      Firebase.RTDB.getFloat(
+        &fbdo,
+        "/devices/main/sensors/acs1/current")) {
+      firebaseAcsCurrent = fbdo.floatData();
+    } else {
+      Serial.print("Read ACS Current Error: ");
+      Serial.println(fbdo.errorReason());
+    }
   }
 
   // ==================================================
   // ACS VOLTAGE
   // ==================================================
 
-  if (
-    Firebase.RTDB.getFloat(
-      &fbdo,
-      "/devices/main/sensors/acs1/voltage")) {
-    firebaseAcsVoltage = fbdo.floatData();
-  } else {
-    Serial.print("Read ACS Voltage Error: ");
-    Serial.println(fbdo.errorReason());
+  if (readAcs) {
+    if (
+      Firebase.RTDB.getFloat(
+        &fbdo,
+        "/devices/main/sensors/acs1/voltage")) {
+      firebaseAcsVoltage = fbdo.floatData();
+    } else {
+      Serial.print("Read ACS Voltage Error: ");
+      Serial.println(fbdo.errorReason());
+    }
   }
 }
 
