@@ -782,8 +782,7 @@ void readACS() {
 
 
 // ======================================================
-// UPLOAD DUMMY DATA KE FIREBASE
-// KONDISI SUMBER SEKITAR 9V
+// UPLOAD DATA SENSOR KE FIREBASE
 // ======================================================
 
 void uploadSensor() {
@@ -1365,7 +1364,7 @@ void setup() {
     millis() - FIREBASE_READ_INTERVAL_MS;
 
   // ==================================================
-  // UPLOAD DUMMY AWAL
+  // UPLOAD DATA AWAL
   // ==================================================
 
   uploadSensor();
@@ -1468,7 +1467,7 @@ void loop() {
   readACS();
 
   // ==================================================
-  // DUMMY → FIREBASE
+  // SENSOR → FIREBASE
   // ==================================================
 
   uploadSensor();
